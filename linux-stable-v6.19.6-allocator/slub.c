@@ -426,6 +426,7 @@ struct freelist_tid {
  * with this_cpu_cmpxchg_double() alignment requirements.
  */
 struct kmem_cache_cpu {
+	//! contains `void* freelist`
 	struct freelist_tid;
 	struct slab *slab;	/* The slab from which we are allocating */
 #ifdef CONFIG_SLUB_CPU_PARTIAL
@@ -806,6 +807,9 @@ static inline bool __slab_update_freelist(struct kmem_cache *s, struct slab *sla
 	if (USE_LOCKLESS_FAST_PATH())
 		lockdep_assert_irqs_disabled();
 
+	//! here "fast" and "slow" is which instruction we are using, NOT refering to the
+	//! fast (kmem_cache_cpu) and slow (slab) freelists.
+	//! why is this not always set?
 	if (s->flags & __CMPXCHG_DOUBLE)
 		ret = __update_freelist_fast(slab, old, new);
 	else
@@ -3699,10 +3703,13 @@ static struct slab *get_partial(struct kmem_cache *s, int node,
 	if (node == NUMA_NO_NODE)
 		searchnode = numa_mem_id();
 
+	//! Get partial slab from current NUMA node.
 	slab = get_partial_node(s, get_node(s, searchnode), pc);
+
 	if (slab || (node != NUMA_NO_NODE && (pc->flags & __GFP_THISNODE)))
 		return slab;
 
+	//! Get node partial slab from closest NUMA node possible.
 	return get_any_partial(s, pc);
 }
 
@@ -4503,6 +4510,7 @@ static inline void *get_freelist(struct kmem_cache *s, struct slab *slab)
 /*
  * Freeze the partial slab and return the pointer to the freelist.
  */
+//! I guess this is ~same as get_freelist(). Notably, move slab freelist to active slab freelist.
 static inline void *freeze_slab(struct kmem_cache *s, struct slab *slab)
 {
 	struct freelist_counters old, new;
@@ -4556,7 +4564,10 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
 
 reread_slab:
 
+	//! get active slab
 	slab = READ_ONCE(c->slab);
+
+	//! do we need a new active slab?
 	if (!slab) {
 		/*
 		 * if the node is not online or has no normal memory, just
@@ -4568,6 +4579,7 @@ reread_slab:
 		goto new_slab;
 	}
 
+	//! normally never entered, we will always match on UMA systems
 	if (unlikely(!node_match(slab, node))) {
 		/*
 		 * same as above but node_match() being false already
@@ -4604,16 +4616,24 @@ reread_slab:
 	/* must check again c->slab in case we got preempted and it changed */
 	local_lock_cpu_slab(s, flags);
 
+	//! locking check
 	if (unlikely(slab != c->slab)) {
 		local_unlock_cpu_slab(s, flags);
 		goto reread_slab;
 	}
+
+	//! fast percpu freelist
 	freelist = c->freelist;
+
+	//! if there are items in the fast freelist, take that
 	if (freelist)
 		goto load_freelist;
 
+	//! slow, slab's freelist
+	//! move the slow slab freelist to the fast kmem_cache_cpu freelist
 	freelist = get_freelist(s, slab);
 
+	//! is the active slab full?
 	if (!freelist) {
 		c->slab = NULL;
 		c->tid = next_tid(c->tid);
@@ -4624,6 +4644,7 @@ reread_slab:
 
 	stat(s, ALLOC_REFILL);
 
+	//! if not, pop object from freelist (slow or fast) head
 load_freelist:
 
 	lockdep_assert_held(this_cpu_ptr(&s->cpu_slab->lock));
@@ -4634,9 +4655,15 @@ load_freelist:
 	 * That slab must be frozen for per cpu allocations to work.
 	 */
 	VM_BUG_ON(!c->slab->frozen);
+
+	//! `freelist` is the fast percpu freelist
+	//! essentially `c->freelist = c->freelist->next;`
 	c->freelist = get_freepointer(s, freelist);
+
 	c->tid = next_tid(c->tid);
 	local_unlock_cpu_slab(s, flags);
+
+	//! return old freelist head i.e. first obj in freelist
 	return freelist;
 
 deactivate_slab:
@@ -4653,37 +4680,59 @@ deactivate_slab:
 	local_unlock_cpu_slab(s, flags);
 	deactivate_slab(s, slab, freelist);
 
+	//! move head of cpu partial list to active slab and take object from it
 new_slab:
 
+	//! config always set.
 #ifdef CONFIG_SLUB_CPU_PARTIAL
+	//! iterate over percpu partial slab lists
 	while (slub_percpu_partial(c)) {
 		local_lock_cpu_slab(s, flags);
+
+		//! Someone created an active slab before we took the lock? bail
 		if (unlikely(c->slab)) {
 			local_unlock_cpu_slab(s, flags);
 			goto reread_slab;
 		}
+
+		//! Also check locking/racy w/e
 		if (unlikely(!slub_percpu_partial(c))) {
 			local_unlock_cpu_slab(s, flags);
 			/* we were preempted and partial list got empty */
 			goto new_objects;
 		}
 
+		//! Get head of slab partial list
 		slab = slub_percpu_partial(c);
+		//! Pop the head from the slab partial list.
 		slub_set_percpu_partial(c, slab);
 
+		//! `node_match(slab, node)` always true on UMA (most) systems
+		//! `!allow_spin` usually true
+		//!  => we always enter this branch 
 		if (likely(node_match(slab, node) &&
 			   pfmemalloc_match(slab, gfpflags)) ||
 		    !allow_spin) {
+			//! set active slab to old partial list head
 			c->slab = slab;
+
+			//! move slab slow freelist to fast kmem_cache_cpu freelist
+			//! and grab a ptr.
 			freelist = get_freelist(s, slab);
+
 			VM_BUG_ON(!freelist);
 			stat(s, CPU_PARTIAL_ALLOC);
+
+			//! return obj from head of new fast freelist
 			goto load_freelist;
 		}
 
 		local_unlock_cpu_slab(s, flags);
 
 		slab->next = NULL;
+
+		//! move the slab to the NODE partial list
+		//! but actually I don't know how this will ever be entered.
 		__put_partials(s, slab);
 	}
 #endif
@@ -4712,8 +4761,12 @@ new_objects:
 	}
 
 	pc.orig_size = orig_size;
+
+	//! Get a node partial slab.
 	slab = get_partial(s, node, &pc);
+
 	if (slab) {
+		//! usually don't enter this
 		if (IS_ENABLED(CONFIG_SLUB_TINY) || kmem_cache_debug(s)) {
 			freelist = pc.object;
 			/*
@@ -4732,14 +4785,22 @@ new_objects:
 			return freelist;
 		}
 
+		//! Freeze slab to prepare it for becoming active slab.
+		//! Get freelist.
 		freelist = freeze_slab(s, slab);
+
+		//! Set this node partial slab to the active slab and load object from cpu active slab.
 		goto retry_load_slab;
 	}
 
+	//! There was no node partial slab.
+	
 	slub_put_cpu_ptr(s->cpu_slab);
+	//! Get slab from buddy allocator!!!
 	slab = new_slab(s, pc.flags, node);
 	c = slub_get_cpu_ptr(s->cpu_slab);
 
+	//! no mem, die.
 	if (unlikely(!slab)) {
 		if (node != NUMA_NO_NODE && !(gfpflags & __GFP_THISNODE)
 		    && try_thisnode) {
@@ -4752,6 +4813,7 @@ new_objects:
 
 	stat(s, ALLOC_SLAB);
 
+	//! not entered.
 	if (IS_ENABLED(CONFIG_SLUB_TINY) || kmem_cache_debug(s)) {
 		freelist = alloc_single_from_new_slab(s, slab, orig_size, gfpflags);
 
@@ -4780,6 +4842,7 @@ new_objects:
 
 	inc_slabs_node(s, slab_nid(slab), slab->objects);
 
+	//! allow_spin usually false. not entered.
 	if (unlikely(!pfmemalloc_match(slab, gfpflags) && allow_spin)) {
 		/*
 		 * For !pfmemalloc_match() case we don't load freelist so that
@@ -4789,9 +4852,11 @@ new_objects:
 		return freelist;
 	}
 
+	//! Set the slab we got from the buddy allocator as the active slab.
 retry_load_slab:
 
 	local_lock_cpu_slab(s, flags);
+	//! locking stuff, ignore this if-statement
 	if (unlikely(c->slab)) {
 		void *flush_freelist = c->freelist;
 		struct slab *flush_slab = c->slab;
@@ -4813,6 +4878,7 @@ retry_load_slab:
 
 		goto retry_load_slab;
 	}
+	// Set slab as the cpu active slab.
 	c->slab = slab;
 
 	goto load_freelist;
@@ -4860,6 +4926,7 @@ static void *__slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
 			goto out;
 		}
 	}
+	//! \/
 	p = ___slab_alloc(s, gfpflags, node, addr, c, orig_size);
 out:
 #ifdef CONFIG_PREEMPT_COUNT
@@ -4912,6 +4979,8 @@ redo:
 	object = c->freelist;
 	slab = c->slab;
 
+	//! usually enabled config
+	//! grabs the node
 #ifdef CONFIG_NUMA
 	if (static_branch_unlikely(&strict_numa) &&
 			node == NUMA_NO_NODE) {
@@ -4934,10 +5003,17 @@ redo:
 	}
 #endif
 
+	//! `!USE_LOCKLESS_FAST_PATH()` is false
 	if (!USE_LOCKLESS_FAST_PATH() ||
+	    //! !object == active slab is full (no fast freelist)
+	    //! wont this be `!node_match(NULL, node)`?
+	    //! null ptr deref?
 	    unlikely(!object || !slab || !node_match(slab, node))) {
+		//! \/ slowpath
 		object = __slab_alloc(s, gfpflags, node, addr, c, orig_size);
 	} else {
+		//! fastpath
+		//! put guy onto kmem_cache_cpu freelist (the "fast" freelist)
 		void *next_object = get_freepointer_safe(s, object);
 
 		/*
@@ -5324,13 +5400,16 @@ static __fastpath_inline void *slab_alloc_node(struct kmem_cache *s, struct list
 	if (unlikely(!s))
 		return NULL;
 
+	//! usually returns NULL
 	object = kfence_alloc(s, orig_size, gfpflags);
 	if (unlikely(object))
 		goto out;
 
+	//! null on v6.19.6
 	if (s->cpu_sheaves)
 		object = alloc_from_pcs(s, gfpflags, node);
 
+	//! main path
 	if (!object)
 		object = __slab_alloc_node(s, gfpflags, node, addr, orig_size);
 
@@ -5726,6 +5805,7 @@ void *__do_kmalloc_node(size_t size, kmem_buckets *b, gfp_t flags, int node,
 	void *ret;
 
 	if (unlikely(size > KMALLOC_MAX_CACHE_SIZE)) {
+		//! if >8k use buddy
 		ret = __kmalloc_large_node_noprof(size, flags, node);
 		trace_kmalloc(caller, ret, size,
 			      PAGE_SIZE << get_order(size), flags, node);
@@ -5737,7 +5817,9 @@ void *__do_kmalloc_node(size_t size, kmem_buckets *b, gfp_t flags, int node,
 
 	s = kmalloc_slab(size, b, flags, caller);
 
+	//! \/
 	ret = slab_alloc_node(s, NULL, flags, node, caller, size);
+
 	ret = kasan_kmalloc(s, ret, size, flags);
 	trace_kmalloc(caller, ret, size, s->size, flags, node);
 	return ret;
@@ -6781,6 +6863,7 @@ redo:
 	}
 
 	if (USE_LOCKLESS_FAST_PATH()) {
+		//! Get the *fast* freelist (current CPU)
 		freelist = READ_ONCE(c->freelist);
 
 		set_freepointer(s, tail, freelist);

@@ -1,7 +1,7 @@
 From efa63bfeef1aa9a599df0d1ed69e1615503dbb17 Mon Sep 17 00:00:00 2001
 From: k4lizen <124312252+k4lizen@users.noreply.github.com>
 Date: Thu, 12 Mar 2026 00:56:33 +0100
-Subject: [PATCH] actually good comments
+Subject: [PATCH 1/2] actually good comments
 
 ---
  mm/slub.c | 67 +++++++++++++++++++++++++++++++++++++++++++++++++++++++

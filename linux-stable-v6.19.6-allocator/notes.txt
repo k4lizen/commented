@@ -1,4 +1,4 @@
-My kfree() investigation.
+kfree() and kmalloc() investigation.
 
 Comment base:
 	https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
@@ -7,3 +7,4 @@ Comment base:
 
 Comment commit:
 	efa63bfeef1aa9a599df0d1ed69e1615503dbb17
+	7bcbb90044788f96e5b22e7f57049ad5d47bca6b
