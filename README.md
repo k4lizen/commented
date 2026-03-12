@@ -32,4 +32,4 @@ Comment commit:
 	efa63bfeef1aa9a599df0d1ed69e1615503dbb17
 ```
 
-I currently don't have a solution for comments that I want to keep private to myself for some time. (A `private/` folder would not be synced between devices.) Maybe just a separate `commented-private` private github repository? Well, we get there when we get there.
+I currently don't have a solution for comments that I want to keep private to myself for some time. (A .gitignored `private/` folder would not be synced between devices.) Maybe just a separate `commented-private` private github repository? Well, we get there when we get there.
