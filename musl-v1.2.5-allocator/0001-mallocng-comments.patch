@@ -1,0 +1,175 @@
+From d02fbca3be97c03aeb86109171d910d7d6697f55 Mon Sep 17 00:00:00 2001
+From: k4lizen <124312252+k4lizen@users.noreply.github.com>
+Date: Thu, 5 Jun 2025 01:34:29 +0200
+Subject: [PATCH] mallocng comments
+
+---
+ src/malloc/mallocng/aligned_alloc.c |  7 ++++++
+ src/malloc/mallocng/free.c          |  3 +++
+ src/malloc/mallocng/malloc.c        |  6 +++++
+ src/malloc/mallocng/meta.h          | 39 ++++++++++++++++++++++++++++-
+ 4 files changed, 54 insertions(+), 1 deletion(-)
+
+diff --git a/src/malloc/mallocng/aligned_alloc.c b/src/malloc/mallocng/aligned_alloc.c
+index e0862a83..d1bcfef0 100644
+--- a/src/malloc/mallocng/aligned_alloc.c
++++ b/src/malloc/mallocng/aligned_alloc.c
+@@ -4,6 +4,7 @@
+ 
+ void *aligned_alloc(size_t align, size_t len)
+ {
++	//! power of two check
+ 	if ((align & -align) != align) {
+ 		errno = EINVAL;
+ 		return 0;
+@@ -30,13 +31,17 @@ void *aligned_alloc(size_t align, size_t len)
+ 	size_t stride = get_stride(g);
+ 	unsigned char *start = g->mem->storage + stride*idx;
+ 	unsigned char *end = g->mem->storage + stride*(idx+1) - IB;
++	//! how many bytes needed to add to op do become aligned
+ 	size_t adj = -(uintptr_t)p & (align-1);
+ 
+ 	if (!adj) {
+ 		set_size(p, end, len);
+ 		return p;
+ 	}
++
++	//! make p aligned
+ 	p += adj;
++
+ 	uint32_t offset = (size_t)(p-g->mem->storage)/UNIT;
+ 	if (offset <= 0xffff) {
+ 		*(uint16_t *)(p-2) = offset;
+@@ -44,6 +49,8 @@ void *aligned_alloc(size_t align, size_t len)
+ 	} else {
+ 		// use a 32-bit offset if 16-bit doesn't fit. for this,
+ 		// 16-bit field must be zero, [-4] byte nonzero.
++		//! I guess this check is only done here since `align`
++		//! is allowed to be really big?... still weird..
+ 		*(uint16_t *)(p-2) = 0;
+ 		*(uint32_t *)(p-8) = offset;
+ 		p[-4] = 1;
+diff --git a/src/malloc/mallocng/free.c b/src/malloc/mallocng/free.c
+index 43f32aad..0eeeb172 100644
+--- a/src/malloc/mallocng/free.c
++++ b/src/malloc/mallocng/free.c
+@@ -132,6 +132,9 @@ void free(void *p)
+ 		uint32_t avail = g->avail_mask;
+ 		uint32_t mask = freed | avail;
+ 		assert(!(mask&self));
++		//! (!free) is "if all slots are either allocated or available" ??
++		//! (mask+self==all) is "if this slot is the last allocated slot in
++		//! the group" -> we want to free the whole group
+ 		if (!freed || mask+self==all) break;
+ 		if (!MT)
+ 			g->freed_mask = freed+self;
+diff --git a/src/malloc/mallocng/malloc.c b/src/malloc/mallocng/malloc.c
+index d695ab8e..27f885bd 100644
+--- a/src/malloc/mallocng/malloc.c
++++ b/src/malloc/mallocng/malloc.c
+@@ -266,12 +266,18 @@ static struct meta *alloc_group(int sc, size_t req)
+ 		struct meta *g = ctx.active[j];
+ 		p = enframe(g, idx, UNIT*size_classes[j]-IB, ctx.mmap_counter);
+ 		m->maplen = 0;
++		//! magic value to denote group inside another groups slot
+ 		p[-3] = (p[-3]&31) | (6<<5);
++		//! set nullbyte for all slots inside inner group
++		//! (-4 because IB?)
+ 		for (int i=0; i<=cnt; i++)
+ 			p[UNIT+i*size-4] = 0;
++		//! the first chunk to alloc is from the end
+ 		active_idx = cnt-1;
+ 	}
+ 	ctx.usage_by_class[sc] += cnt;
++	//! all chunks that haven't yet been allocated
++	//! and as such are available
+ 	m->avail_mask = (2u<<active_idx)-1;
+ 	m->freed_mask = (2u<<(cnt-1))-1 - m->avail_mask;
+ 	m->mem = (void *)p;
+diff --git a/src/malloc/mallocng/meta.h b/src/malloc/mallocng/meta.h
+index 61ec53f9..9a147459 100644
+--- a/src/malloc/mallocng/meta.h
++++ b/src/malloc/mallocng/meta.h
+@@ -12,6 +12,7 @@ extern const uint16_t size_classes[];
+ #define MMAP_THRESHOLD 131052
+ 
+ #define UNIT 16
++//! short for "in-band" metadata (of slots)
+ #define IB 4
+ 
+ struct group {
+@@ -183,26 +184,62 @@ static inline size_t get_stride(const struct meta *g)
+ 
+ static inline void set_size(unsigned char *p, unsigned char *end, size_t n)
+ {
++	//! p -> start of user memory
++	//! end -> end of slot - IB (so we don't overlap next slots metadata)
++	//! n - amount of user requested memory
++	//! `reserved` is the amount of unused memory after the allocation that the user requested
++	//! but within the same slot the user is getting.
++	//! remember, we didn't necessarily use up all the slack when determining p!
+ 	int reserved = end-p-n;
++	//! null-byte to prevent some exploits
+ 	if (reserved) end[-reserved] = 0;
++	//! to let free() know the size of the reserved area, if it allows
++	//! fitting a uint32_t, we will write down the reserved area size
++	//! right at the end of the slot
+ 	if (reserved >= 5) {
+ 		*(uint32_t *)(end-4) = reserved;
+ 		end[-5] = 0;
+ 		reserved = 5;
+ 	}
++	//! if the reserved area is less than 5, we will store it
++	//! in the top three bits of p[-3] (the bottom 5 bits store
++	//! the slot index in the group)
+ 	p[-3] = (p[-3]&31) + (reserved<<5);
+ }
+ 
++//! returns start of user memory
+ static inline void *enframe(struct meta *g, int idx, size_t n, int ctr)
+ {
++	//! the size of the group's slots
+ 	size_t stride = get_stride(g);
++	//! the unused memory of this particular slot
++	//! the user only actually needs `n`, so we can do
++	//! fun stuff with the slack (in-band metadata :D).
+ 	size_t slack = (stride-IB-n)/UNIT;
++	//! p = the start of the slot. this would be USER MEMORY
++	//! if we didn't have any slack. The start of the metadata
++	//! is 0x10 BEHIND this. The end of the metadata will stretch
++	//! past `p` if we have some slack.
++	//! note the
++	//! 	  char pad[UNIT - sizeof(struct meta *) - 1];
++	//!    unsigned char storage[];
++	//! in `struct group`, the padding is for the first slot's metadata
++	//! (why `struct meta` though?).
+ 	unsigned char *p = g->mem->storage + stride*idx;
++	//! we are doing -IB because there is the next slot's metadata
+ 	unsigned char *end = p+stride-IB;
+ 	// cycle offset within slot to increase interval to address
+ 	// reuse, facilitate trapping double-free.
++	//! ctr is always ctx.mmap_counter - i.e. it is quite predicatble
++	//! by exploits. that is used if this slot has never been allocated
++	//! i guess. if it has been allocated before, probably p[-3] is set
++	//! and we check the previous offest (*(uint16_t *)(p-2)) and add
++	//! one to it to prevent double free stuff.
+ 	int off = (p[-3] ? *(uint16_t *)(p-2) + 1 : ctr) & 255;
+ 	assert(!p[-4]);
++	//! if the offset is bigger than the slack
++	//! pull it back. both the offset and the slack
++	//! are in 0x10 granularity.
+ 	if (off > slack) {
+ 		size_t m = slack;
+ 		m |= m>>1; m |= m>>2; m |= m>>4;
+@@ -220,7 +257,7 @@ static inline void *enframe(struct meta *g, int idx, size_t n, int ctr)
+ 		// byte, so make one.
+ 		p[-4] = 0;
+ 	}
+-	*(uint16_t *)(p-2) = (size_t)(p-g->mem->storage)/UNIT;
++	*(uint16_t *)(p-2) = (size_t)(p - g->mem->storage)/UNIT;
+ 	p[-3] = idx;
+ 	set_size(p, end, n);
+ 	return p;
+-- 
+2.53.0
+

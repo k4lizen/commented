@@ -1,0 +1,9 @@
+Investigation into musl's allocator: mallocng.
+
+Comment base:
+	git://git.musl-libc.org/musl
+	0784374d561435f7c787a555aeab8ede699ed298
+	v1.2.5
+
+Comment commit:
+	d02fbca3be97c03aeb86109171d910d7d6697f55
