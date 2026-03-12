@@ -1,0 +1,9 @@
+My kfree() investigation.
+
+Comment base:
+	https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
+	6a753907865e35ae986b7b2ad48daa1eab4bcf3a
+	v6.19.6
+
+Comment commit:
+	efa63bfeef1aa9a599df0d1ed69e1615503dbb17

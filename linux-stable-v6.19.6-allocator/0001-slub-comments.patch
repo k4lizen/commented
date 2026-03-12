@@ -1,0 +1,243 @@
+From efa63bfeef1aa9a599df0d1ed69e1615503dbb17 Mon Sep 17 00:00:00 2001
+From: k4lizen <124312252+k4lizen@users.noreply.github.com>
+Date: Thu, 12 Mar 2026 00:56:33 +0100
+Subject: [PATCH] actually good comments
+
+---
+ mm/slub.c | 67 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 67 insertions(+)
+
+diff --git a/mm/slub.c b/mm/slub.c
+index 889c2804bbfe..448f8cceed45 100644
+--- a/mm/slub.c
++++ b/mm/slub.c
+@@ -3938,10 +3938,17 @@ static void __put_partials(struct kmem_cache *s, struct slab *partial_slab)
+ 			spin_lock_irqsave(&n->list_lock, flags);
+ 		}
+ 
++		//! IMPORTANT check
++		//! For all slabs that are being moved from the cpu partial list to the node partial list
++		//! check if they are empty (!slab->inuse) and if we are above the allowed number of slabs
++		//! in the node partial list (n->nr_partial >= s->min_partial). If so, don't add that slab
++		//! to the node partial list, but instead discard it to the buddy allocator (at the end of
++		//! this function).
+ 		if (unlikely(!slab->inuse && n->nr_partial >= s->min_partial)) {
+ 			slab->next = slab_to_discard;
+ 			slab_to_discard = slab;
+ 		} else {
++			//! Again, "partial" in `add_partial` here refers to the NODE partial list. 
+ 			add_partial(n, slab, DEACTIVATE_TO_TAIL);
+ 			stat(s, FREE_ADD_PARTIAL);
+ 		}
+@@ -3950,6 +3957,7 @@ static void __put_partials(struct kmem_cache *s, struct slab *partial_slab)
+ 	if (n)
+ 		spin_unlock_irqrestore(&n->list_lock, flags);
+ 
++	//! Discard all the slabs we marked to buddy.
+ 	while (slab_to_discard) {
+ 		slab = slab_to_discard;
+ 		slab_to_discard = slab_to_discard->next;
+@@ -4007,6 +4015,8 @@ static void put_cpu_partial(struct kmem_cache *s, struct slab *slab, int drain)
+ 	oldslab = this_cpu_read(s->cpu_slab->partial);
+ 
+ 	if (oldslab) {
++		//! drain=1 always when coming from kfree().
++		//! IMPORTANT check.
+ 		if (drain && oldslab->slabs >= s->cpu_partial_slabs) {
+ 			/*
+ 			 * Partial array is full. Move the existing set to the
+@@ -4030,6 +4040,8 @@ static void put_cpu_partial(struct kmem_cache *s, struct slab *slab, int drain)
+ 	local_unlock_cpu_slab(s, flags);
+ 
+ 	if (slab_to_put) {
++		//! The "partials" in __put_partials is referring to the NODE partial list.
++		//! `slab_to_put` is the head of the old per cpu partial list (which is now disconnected)
+ 		__put_partials(s, slab_to_put);
+ 		stat(s, CPU_PARTIAL_DRAIN);
+ 	}
+@@ -5964,6 +5976,7 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
+ 	 * above.
+ 	 */
+ 
++	//! The loop is for locking reasons, we will just do "one operation".
+ 	do {
+ 		if (unlikely(n)) {
+ 			spin_unlock_irqrestore(&n->list_lock, flags);
+@@ -5973,13 +5986,23 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
+ 		old.freelist = slab->freelist;
+ 		old.counters = slab->counters;
+ 
++		//! was_full = all entries in the slab were allocated =
++		//! the slab wasn't even being tracked by the allocator (no pointers to it,
++		//! we only find our way to the allocator via the (struct slab*) in vmemmap_base)
+ 		was_full = (old.freelist == NULL);
++
++		//! Frozen is always true for the active slab, it means
++		//! "don't move this around, something is happening with it".
++		//! Though I haven't yet seen a non-active slab be frozen I think.
+ 		was_frozen = old.frozen;
+ 
++		//! Add freelist pointer to object.
+ 		set_freepointer(s, tail, old.freelist);
+ 
+ 		new.freelist = head;
+ 		new.counters = old.counters;
++
++		//! cnt = 1 normally.
+ 		new.inuse -= cnt;
+ 
+ 		/*
+@@ -5987,14 +6010,21 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
+ 		 * to (due to not being full anymore) the partial list.
+ 		 * Unless it's frozen.
+ 		 */
++		 //! remember that was_frozen ~ is active
++		 //! (!new.inuse) <=> (new.inuse == 0) <=> after freeing this object, this slab is now empty
+ 		if ((!new.inuse || was_full) && !was_frozen) {
+ 			/*
+ 			 * If slab becomes non-full and we have cpu partial
+ 			 * lists, we put it there unconditionally to avoid
+ 			 * taking the list_lock. Otherwise we need it.
+ 			 */
++			 //! `IS_ENABLED(CONFIG_SLUB_CPU_PARTIAL)` always true
++			 //! => to enter this if-statement we must NOT be full
++			 //! => to enter this if-statement (taking into account the preceeding one as well)
++			 //!    we must be NOT active and EMPTY.
+ 			if (!(IS_ENABLED(CONFIG_SLUB_CPU_PARTIAL) && was_full)) {
+ 
++				//! Get node for this kmem_cache
+ 				n = get_node(s, slab_nid(slab));
+ 				/*
+ 				 * Speculatively acquire the list_lock.
+@@ -6006,15 +6036,23 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
+ 				 */
+ 				spin_lock_irqsave(&n->list_lock, flags);
+ 
++				//! Is the current slab on the node partial slab list?
+ 				on_node_partial = slab_test_node_partial(slab);
+ 			}
+ 		}
+ 
++	//! Try to update freelist pointer in the apropriate struct (the just-freed object is now head)
++	//! (may fail due to locking so we try again)
+ 	} while (!slab_update_freelist(s, slab, &old, &new, "__slab_free"));
+ 
+ 	if (likely(!n)) {
++		//! We didn't get a node pointer
++		//! We are active or non-empty.
+ 
+ 		if (likely(was_frozen)) {
++			//! We are on the active slab. Since this function is the slow path we
++			//! are on the active slab of another CPU, but in any case, nothing else to do.
++			
+ 			/*
+ 			 * The list lock was not taken therefore no list
+ 			 * activity can be necessary.
+@@ -6025,6 +6063,10 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
+ 			 * If we started with a full slab then put it onto the
+ 			 * per cpu partial list.
+ 			 */
++			//! IMPORTANT codepath!! While putting onto cpu partial list, it may
++			//! get filled up and slabs may be migrated to the node partial list.
++			//! It may even happen that the node partial list gets filled up, and
++			//! slabs are discarded to buddy.
+ 			put_cpu_partial(s, slab, 1);
+ 			stat(s, CPU_PARTIAL_FREE);
+ 		}
+@@ -6037,19 +6079,25 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
+ 		return;
+ 	}
+ 
++	//! We are for sure an empty slab either on the cpu partial list or node partial list.
++	
+ 	/*
+ 	 * This slab was partially empty but not on the per-node partial list,
+ 	 * in which case we shouldn't manipulate its list, just return.
+ 	 */
++	//! I think the comment is misleading and this is never partially empty, always fully empty.
+ 	if (!was_full && !on_node_partial) {
+ 		spin_unlock_irqrestore(&n->list_lock, flags);
+ 		return;
+ 	}
+ 
++	//! We are an EMPTY slab on the node partial list.
++
+ 	/*
+ 	 * If slab became empty, should we add/keep it on the partial list or we
+ 	 * have enough?
+ 	 */
++	//! IMPORTANT check!! If we pass, we free to buddy.
+ 	if (unlikely(!new.inuse && n->nr_partial >= s->min_partial))
+ 		goto slab_empty;
+ 
+@@ -6062,6 +6110,8 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
+ 		add_partial(n, slab, DEACTIVATE_TO_TAIL);
+ 		stat(s, FREE_ADD_PARTIAL);
+ 	}
++
++	//! The empty slabs stays on the node partial list and nothing else needs to be done.
+ 	spin_unlock_irqrestore(&n->list_lock, flags);
+ 	return;
+ 
+@@ -6077,6 +6127,7 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
+ 
+ 	spin_unlock_irqrestore(&n->list_lock, flags);
+ 	stat(s, FREE_SLAB);
++	//! Free to buddy!!!
+ 	discard_slab(s, slab);
+ }
+ 
+@@ -6701,6 +6752,8 @@ static __always_inline void do_slab_free(struct kmem_cache *s,
+ 	/* Same with comment on barrier() in __slab_alloc_node() */
+ 	barrier();
+ 
++	//! Is the slab of the object being freed, the "active" slab of the currently
++	//! running CPU?
+ 	if (unlikely(slab != c->slab)) {
+ 		if (unlikely(!allow_spin)) {
+ 			/*
+@@ -6711,10 +6764,12 @@ static __always_inline void do_slab_free(struct kmem_cache *s,
+ 			 */
+ 			defer_free(s, head);
+ 		} else {
++			//! The "slow path" where all the fun stuff happens.
+ 			__slab_free(s, slab, head, tail, cnt, addr);
+ 		}
+ 		return;
+ 	}
++	//! Just add the object to the CPU's active slab's freelist.
+ 
+ 	if (unlikely(!allow_spin)) {
+ 		if ((in_nmi() || !USE_LOCKLESS_FAST_PATH()) &&
+@@ -6773,6 +6828,7 @@ void slab_free(struct kmem_cache *s, struct slab *slab, void *object,
+ 			return;
+ 	}
+ 
++	//! \/
+ 	do_slab_free(s, slab, object, object, 1, addr);
+ }
+ 
+@@ -6967,9 +7023,20 @@ void kfree(const void *object)
+ 	if (unlikely(ZERO_OR_NULL_PTR(object)))
+ 		return;
+ 
++	//! page = (struct page*)(vmemmap_base + (__phys_addr(object) >> 12));
+ 	page = virt_to_page(object);
++
++	//! slab = (struct slab *)page
++	//! Literarly just a cast.
+ 	slab = page_slab(page);
++
++	//! i.e. to get allocator metadata from an object pointer, we take the physical
++	//! page's entry in the vmemmap_base list of `struct page`s. This entry has special
++	//! data depending on the subsystem, in our case we expect it to be a (struct slab*)
++	
+ 	if (!slab) {
++		//! This is mega weird, when is this hit? p.howe said this can be leveraged
++		//! to do invalid frees.
+ 		free_large_kmalloc(page, (void *)object);
+ 		return;
+ 	}
+-- 
+2.53.0
+
