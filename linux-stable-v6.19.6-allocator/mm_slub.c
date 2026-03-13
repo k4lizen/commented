@@ -4485,6 +4485,9 @@ __update_cpu_freelist_fast(struct kmem_cache *s,
  *
  * If this function returns NULL then the slab has been unfrozen.
  */
+//! Despite the comment saying "transfer the freelist to the per cpu freelist"
+//! this does not happen here. Here we unlink the freelist from the slab and return it,
+//! but the callee will be the one doing `c->freelist = freelist`.
 static inline void *get_freelist(struct kmem_cache *s, struct slab *slab)
 {
 	struct freelist_counters old, new;
@@ -4510,7 +4513,7 @@ static inline void *get_freelist(struct kmem_cache *s, struct slab *slab)
 /*
  * Freeze the partial slab and return the pointer to the freelist.
  */
-//! I guess this is ~same as get_freelist(). Notably, move slab freelist to active slab freelist.
+//! I guess this is ~same as get_freelist().
 static inline void *freeze_slab(struct kmem_cache *s, struct slab *slab)
 {
 	struct freelist_counters old, new;
@@ -4656,8 +4659,15 @@ load_freelist:
 	 */
 	VM_BUG_ON(!c->slab->frozen);
 
-	//! `freelist` is the fast percpu freelist
-	//! essentially `c->freelist = c->freelist->next;`
+	//! `freelist` can be:
+	//!   + the active slabs fast freelist (kmem_cache_cpu->freelist)
+	//!   + the active slabs slow freelist (kmem_cache_cpu->slab->freelist)
+	//!   + a cpu partial slabs freelist
+	//!   + a node partial slabs freelist
+	//!   + a freshly allocated (from buddy) slab's just-constructed freelist
+	//! In any case, the slab has been hooked up to be the active slab now.
+	//! We are making the second object in that freelist the head of the active slab fast freelist with this line.
+	//! (because the first object will be returned with this kmalloc)
 	c->freelist = get_freepointer(s, freelist);
 
 	c->tid = next_tid(c->tid);

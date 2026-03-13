@@ -1,13 +1,13 @@
-From 3de090e56922badea3256f5611c5030acb15f18d Mon Sep 17 00:00:00 2001
+From ce0ad86d30c7eea0984de8076e537df0191a0ad9 Mon Sep 17 00:00:00 2001
 From: k4lizen <124312252+k4lizen@users.noreply.github.com>
 Date: Thu, 12 Mar 2026 16:40:28 +0100
 Subject: [PATCH 2/2] kmalloc good comments
 
 ---
  include/linux/slab.h |  9 +++++
- mm/slab.h            |  4 +--
- mm/slub.c            | 83 ++++++++++++++++++++++++++++++++++++++++++++
- 3 files changed, 94 insertions(+), 2 deletions(-)
+ mm/slab.h            |  4 +-
+ mm/slub.c            | 93 ++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 104 insertions(+), 2 deletions(-)
 
 diff --git a/include/linux/slab.h b/include/linux/slab.h
 index 2482992248dc..40b3611ee628 100644
@@ -66,7 +66,7 @@ index e767aa7e91b0..95e2741a9ba4 100644
  				};
  #endif
 diff --git a/mm/slub.c b/mm/slub.c
-index 448f8cceed45..0d08d7f0088f 100644
+index 448f8cceed45..e8aa6f522588 100644
 --- a/mm/slub.c
 +++ b/mm/slub.c
 @@ -426,6 +426,7 @@ struct freelist_tid {
@@ -101,15 +101,25 @@ index 448f8cceed45..0d08d7f0088f 100644
  	return get_any_partial(s, pc);
  }
  
-@@ -4503,6 +4510,7 @@ static inline void *get_freelist(struct kmem_cache *s, struct slab *slab)
+@@ -4478,6 +4485,9 @@ __update_cpu_freelist_fast(struct kmem_cache *s,
+  *
+  * If this function returns NULL then the slab has been unfrozen.
+  */
++//! Despite the comment saying "transfer the freelist to the per cpu freelist"
++//! this does not happen here. Here we unlink the freelist from the slab and return it,
++//! but the callee will be the one doing `c->freelist = freelist`.
+ static inline void *get_freelist(struct kmem_cache *s, struct slab *slab)
+ {
+ 	struct freelist_counters old, new;
+@@ -4503,6 +4513,7 @@ static inline void *get_freelist(struct kmem_cache *s, struct slab *slab)
  /*
   * Freeze the partial slab and return the pointer to the freelist.
   */
-+//! I guess this is ~same as get_freelist(). Notably, move slab freelist to active slab freelist.
++//! I guess this is ~same as get_freelist().
  static inline void *freeze_slab(struct kmem_cache *s, struct slab *slab)
  {
  	struct freelist_counters old, new;
-@@ -4556,7 +4564,10 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
+@@ -4556,7 +4567,10 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
  
  reread_slab:
  
@@ -120,7 +130,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  	if (!slab) {
  		/*
  		 * if the node is not online or has no normal memory, just
-@@ -4568,6 +4579,7 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
+@@ -4568,6 +4582,7 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
  		goto new_slab;
  	}
  
@@ -128,7 +138,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  	if (unlikely(!node_match(slab, node))) {
  		/*
  		 * same as above but node_match() being false already
-@@ -4604,16 +4616,24 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
+@@ -4604,16 +4619,24 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
  	/* must check again c->slab in case we got preempted and it changed */
  	local_lock_cpu_slab(s, flags);
  
@@ -153,7 +163,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  	if (!freelist) {
  		c->slab = NULL;
  		c->tid = next_tid(c->tid);
-@@ -4624,6 +4644,7 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
+@@ -4624,6 +4647,7 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
  
  	stat(s, ALLOC_REFILL);
  
@@ -161,13 +171,20 @@ index 448f8cceed45..0d08d7f0088f 100644
  load_freelist:
  
  	lockdep_assert_held(this_cpu_ptr(&s->cpu_slab->lock));
-@@ -4634,9 +4655,15 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
+@@ -4634,9 +4658,22 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
  	 * That slab must be frozen for per cpu allocations to work.
  	 */
  	VM_BUG_ON(!c->slab->frozen);
 +
-+	//! `freelist` is the fast percpu freelist
-+	//! essentially `c->freelist = c->freelist->next;`
++	//! `freelist` can be:
++	//!   + the active slabs fast freelist (kmem_cache_cpu->freelist)
++	//!   + the active slabs slow freelist (kmem_cache_cpu->slab->freelist)
++	//!   + a cpu partial slabs freelist
++	//!   + a node partial slabs freelist
++	//!   + a freshly allocated (from buddy) slab's just-constructed freelist
++	//! In any case, the slab has been hooked up to be the active slab now.
++	//! We are making the second object in that freelist the head of the active slab fast freelist with this line.
++	//! (because the first object will be returned with this kmalloc)
  	c->freelist = get_freepointer(s, freelist);
 +
  	c->tid = next_tid(c->tid);
@@ -177,7 +194,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  	return freelist;
  
  deactivate_slab:
-@@ -4653,37 +4680,59 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
+@@ -4653,37 +4690,59 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
  	local_unlock_cpu_slab(s, flags);
  	deactivate_slab(s, slab, freelist);
  
@@ -237,7 +254,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  		__put_partials(s, slab);
  	}
  #endif
-@@ -4712,8 +4761,12 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
+@@ -4712,8 +4771,12 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
  	}
  
  	pc.orig_size = orig_size;
@@ -250,7 +267,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  		if (IS_ENABLED(CONFIG_SLUB_TINY) || kmem_cache_debug(s)) {
  			freelist = pc.object;
  			/*
-@@ -4732,14 +4785,22 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
+@@ -4732,14 +4795,22 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
  			return freelist;
  		}
  
@@ -273,7 +290,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  	if (unlikely(!slab)) {
  		if (node != NUMA_NO_NODE && !(gfpflags & __GFP_THISNODE)
  		    && try_thisnode) {
-@@ -4752,6 +4813,7 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
+@@ -4752,6 +4823,7 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
  
  	stat(s, ALLOC_SLAB);
  
@@ -281,7 +298,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  	if (IS_ENABLED(CONFIG_SLUB_TINY) || kmem_cache_debug(s)) {
  		freelist = alloc_single_from_new_slab(s, slab, orig_size, gfpflags);
  
-@@ -4780,6 +4842,7 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
+@@ -4780,6 +4852,7 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
  
  	inc_slabs_node(s, slab_nid(slab), slab->objects);
  
@@ -289,7 +306,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  	if (unlikely(!pfmemalloc_match(slab, gfpflags) && allow_spin)) {
  		/*
  		 * For !pfmemalloc_match() case we don't load freelist so that
-@@ -4789,9 +4852,11 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
+@@ -4789,9 +4862,11 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
  		return freelist;
  	}
  
@@ -301,7 +318,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  	if (unlikely(c->slab)) {
  		void *flush_freelist = c->freelist;
  		struct slab *flush_slab = c->slab;
-@@ -4813,6 +4878,7 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
+@@ -4813,6 +4888,7 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
  
  		goto retry_load_slab;
  	}
@@ -309,7 +326,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  	c->slab = slab;
  
  	goto load_freelist;
-@@ -4860,6 +4926,7 @@ static void *__slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
+@@ -4860,6 +4936,7 @@ static void *__slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
  			goto out;
  		}
  	}
@@ -317,7 +334,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  	p = ___slab_alloc(s, gfpflags, node, addr, c, orig_size);
  out:
  #ifdef CONFIG_PREEMPT_COUNT
-@@ -4912,6 +4979,8 @@ static __always_inline void *__slab_alloc_node(struct kmem_cache *s,
+@@ -4912,6 +4989,8 @@ static __always_inline void *__slab_alloc_node(struct kmem_cache *s,
  	object = c->freelist;
  	slab = c->slab;
  
@@ -326,7 +343,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  #ifdef CONFIG_NUMA
  	if (static_branch_unlikely(&strict_numa) &&
  			node == NUMA_NO_NODE) {
-@@ -4934,10 +5003,17 @@ static __always_inline void *__slab_alloc_node(struct kmem_cache *s,
+@@ -4934,10 +5013,17 @@ static __always_inline void *__slab_alloc_node(struct kmem_cache *s,
  	}
  #endif
  
@@ -344,7 +361,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  		void *next_object = get_freepointer_safe(s, object);
  
  		/*
-@@ -5324,13 +5400,16 @@ static __fastpath_inline void *slab_alloc_node(struct kmem_cache *s, struct list
+@@ -5324,13 +5410,16 @@ static __fastpath_inline void *slab_alloc_node(struct kmem_cache *s, struct list
  	if (unlikely(!s))
  		return NULL;
  
@@ -361,7 +378,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  	if (!object)
  		object = __slab_alloc_node(s, gfpflags, node, addr, orig_size);
  
-@@ -5726,6 +5805,7 @@ void *__do_kmalloc_node(size_t size, kmem_buckets *b, gfp_t flags, int node,
+@@ -5726,6 +5815,7 @@ void *__do_kmalloc_node(size_t size, kmem_buckets *b, gfp_t flags, int node,
  	void *ret;
  
  	if (unlikely(size > KMALLOC_MAX_CACHE_SIZE)) {
@@ -369,7 +386,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  		ret = __kmalloc_large_node_noprof(size, flags, node);
  		trace_kmalloc(caller, ret, size,
  			      PAGE_SIZE << get_order(size), flags, node);
-@@ -5737,7 +5817,9 @@ void *__do_kmalloc_node(size_t size, kmem_buckets *b, gfp_t flags, int node,
+@@ -5737,7 +5827,9 @@ void *__do_kmalloc_node(size_t size, kmem_buckets *b, gfp_t flags, int node,
  
  	s = kmalloc_slab(size, b, flags, caller);
  
@@ -379,7 +396,7 @@ index 448f8cceed45..0d08d7f0088f 100644
  	ret = kasan_kmalloc(s, ret, size, flags);
  	trace_kmalloc(caller, ret, size, s->size, flags, node);
  	return ret;
-@@ -6781,6 +6863,7 @@ static __always_inline void do_slab_free(struct kmem_cache *s,
+@@ -6781,6 +6873,7 @@ static __always_inline void do_slab_free(struct kmem_cache *s,
  	}
  
  	if (USE_LOCKLESS_FAST_PATH()) {
