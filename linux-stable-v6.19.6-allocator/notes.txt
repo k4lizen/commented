@@ -1,5 +1,24 @@
 kfree() and kmalloc() investigation.
 
+Populate with
+```fish
+set CWD $PWD
+
+cd ~/opt/linux-stable
+git switch v6.19.6-commented
+
+git format-patch -2 HEAD
+
+mv ~/opt/linux-stable/0001-actually-good-comments.patch $CWD/.
+mv ~/opt/linux-stable/0002-kmalloc-good-comments.patch $CWD/.
+
+cp ~/opt/linux-stable/mm/slub.c $CWD/mm_slub.c
+cp ~/opt/linux-stable/mm/slab.h $CWD/mm_slab.h
+cp ~/opt/linux-stable/include/linux/slab.h $CWD/include_linux_slab.h
+
+cd $CWD
+```
+
 Comment base:
 	https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
 	6a753907865e35ae986b7b2ad48daa1eab4bcf3a
