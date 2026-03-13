@@ -5,6 +5,6 @@ Comment base:
 	6a753907865e35ae986b7b2ad48daa1eab4bcf3a
 	v6.19.6
 
-Comment commit:
+Comment commit(s):
 	efa63bfeef1aa9a599df0d1ed69e1615503dbb17
 	7bcbb90044788f96e5b22e7f57049ad5d47bca6b

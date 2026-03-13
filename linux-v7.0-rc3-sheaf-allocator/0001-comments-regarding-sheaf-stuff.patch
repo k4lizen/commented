@@ -1,0 +1,287 @@
+From 8f04a92d302e49d4037cfa29c588dea0f6a7518a Mon Sep 17 00:00:00 2001
+From: k4lizen <124312252+k4lizen@users.noreply.github.com>
+Date: Fri, 13 Mar 2026 06:56:19 +0100
+Subject: [PATCH] comments regarding sheaf stuff
+
+---
+ mm/slab.h |  2 +-
+ mm/slub.c | 49 +++++++++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 48 insertions(+), 3 deletions(-)
+
+diff --git a/mm/slab.h b/mm/slab.h
+index e9ab292acd22..b62ce2075f55 100644
+--- a/mm/slab.h
++++ b/mm/slab.h
+@@ -203,7 +203,7 @@ struct kmem_cache {
+ 	unsigned int object_size;	/* Object size without metadata */
+ 	struct reciprocal_value reciprocal_size;
+ 	unsigned int offset;		/* Free pointer offset */
+-	unsigned int sheaf_capacity;
++	unsigned int sheaf_capacity; //! number of objects in sheaf
+ 	struct kmem_cache_order_objects oo;
+ 
+ 	/* Allocation and freeing of slabs */
+diff --git a/mm/slub.c b/mm/slub.c
+index 20cb4f3b636d..3bbcc55c2197 100644
+--- a/mm/slub.c
++++ b/mm/slub.c
+@@ -415,7 +415,7 @@ struct slab_sheaf {
+ 	unsigned int size;
+ 	int node; /* only used for rcu_sheaf */
+ 	void *objects[];
+-};
++}; //! ~0x20 bytes
+ 
+ struct slub_percpu_sheaves {
+ 	local_trylock_t lock;
+@@ -2748,6 +2748,7 @@ static void *setup_object(struct kmem_cache *s, void *object)
+ 	return object;
+ }
+ 
++//! "empty sheaf" meaning no objects inside
+ static struct slab_sheaf *__alloc_empty_sheaf(struct kmem_cache *s, gfp_t gfp,
+ 					      unsigned int capacity)
+ {
+@@ -2768,6 +2769,7 @@ static struct slab_sheaf *__alloc_empty_sheaf(struct kmem_cache *s, gfp_t gfp,
+ 		gfp |= __GFP_NO_OBJ_EXT;
+ 
+ 	sheaf_size = struct_size(sheaf, objects, capacity);
++	//! lmao.
+ 	sheaf = kzalloc(sheaf_size, gfp);
+ 
+ 	if (unlikely(!sheaf))
+@@ -2815,6 +2817,7 @@ static int refill_sheaf(struct kmem_cache *s, struct slab_sheaf *sheaf,
+ 	if (!to_fill)
+ 		return 0;
+ 
++	//! are all the allocated objects contiguous?
+ 	filled = refill_objects(s, &sheaf->objects[sheaf->size], gfp, to_fill,
+ 				to_fill);
+ 
+@@ -2831,6 +2834,7 @@ static int refill_sheaf(struct kmem_cache *s, struct slab_sheaf *sheaf,
+ 
+ static struct slab_sheaf *alloc_full_sheaf(struct kmem_cache *s, gfp_t gfp)
+ {
++	//! "empty sheaf" here meaning no objects inside
+ 	struct slab_sheaf *sheaf = alloc_empty_sheaf(s, gfp);
+ 
+ 	if (!sheaf)
+@@ -4561,6 +4565,11 @@ bool slab_post_alloc_hook(struct kmem_cache *s, struct list_lru *lru,
+  * initially called). If not successful, returns NULL and the local lock
+  * unlocked.
+  */
++//! "empty sheaf" means the objects[] array in the shief is nulled
++//!   so either fully allocated, or uninitialized
++//! "full sheaf" means the objects[] array in the shief is fully populated by pointers
++//!   i.e. can alloc all
++//! imagine alloc-ing is taking a piece of wheat from a "full sheaf"
+ static struct slub_percpu_sheaves *
+ __pcs_replace_empty_main(struct kmem_cache *s, struct slub_percpu_sheaves *pcs, gfp_t gfp)
+ {
+@@ -4577,6 +4586,7 @@ __pcs_replace_empty_main(struct kmem_cache *s, struct slub_percpu_sheaves *pcs,
+ 		return NULL;
+ 	}
+ 
++	//! if we have a spare, swap it into main.
+ 	if (pcs->spare && pcs->spare->size > 0) {
+ 		swap(pcs->main, pcs->spare);
+ 		return pcs;
+@@ -4600,8 +4610,10 @@ __pcs_replace_empty_main(struct kmem_cache *s, struct slub_percpu_sheaves *pcs,
+ 
+ 	stat(s, BARN_GET_FAIL);
+ 
++	//! allow_spin usually true (i think).
+ 	if (allow_spin) {
+ 		if (pcs->spare) {
++			//! spare must be empty at this point
+ 			empty = pcs->spare;
+ 			pcs->spare = NULL;
+ 		} else {
+@@ -4626,6 +4638,8 @@ __pcs_replace_empty_main(struct kmem_cache *s, struct slub_percpu_sheaves *pcs,
+ 			free_empty_sheaf(s, empty);
+ 		}
+ 	} else {
++		//! ->spare is a null pointer.
++		//! allocs empty sheaf and then "refill"s it
+ 		full = alloc_full_sheaf(s, gfp);
+ 	}
+ 
+@@ -4644,6 +4658,7 @@ __pcs_replace_empty_main(struct kmem_cache *s, struct slub_percpu_sheaves *pcs,
+ 	 * enough so just ignore them to simplify the recovery.
+ 	 */
+ 
++	//! we have a fresh full shief, put it into main
+ 	if (pcs->main->size == 0) {
+ 		if (!pcs->spare)
+ 			pcs->spare = pcs->main;
+@@ -4679,6 +4694,7 @@ void *alloc_from_pcs(struct kmem_cache *s, gfp_t gfp, int node)
+ 	void *object;
+ 
+ #ifdef CONFIG_NUMA
++	//! ignore
+ 	if (static_branch_unlikely(&strict_numa) &&
+ 			 node == NUMA_NO_NODE) {
+ 
+@@ -4700,17 +4716,20 @@ void *alloc_from_pcs(struct kmem_cache *s, gfp_t gfp, int node)
+ 	}
+ #endif
+ 
++	//! usually set
+ 	node_requested = IS_ENABLED(CONFIG_NUMA) && node != NUMA_NO_NODE;
+ 
+ 	/*
+ 	 * We assume the percpu sheaves contain only local objects although it's
+ 	 * not completely guaranteed, so we verify later.
+ 	 */
++	//! bookkeeping
+ 	if (unlikely(node_requested && node != numa_mem_id())) {
+ 		stat(s, ALLOC_NODE_MISMATCH);
+ 		return NULL;
+ 	}
+ 
++	//! bookkeeping
+ 	if (!local_trylock(&s->cpu_sheaves->lock))
+ 		return NULL;
+ 
+@@ -4722,6 +4741,7 @@ void *alloc_from_pcs(struct kmem_cache *s, gfp_t gfp, int node)
+ 			return NULL;
+ 	}
+ 
++	//! just take the guy
+ 	object = pcs->main->objects[pcs->main->size - 1];
+ 
+ 	if (unlikely(node_requested)) {
+@@ -4853,6 +4873,8 @@ static __fastpath_inline void *slab_alloc_node(struct kmem_cache *s, struct list
+ 
+ 	object = alloc_from_pcs(s, gfpflags, node);
+ 
++	//! doesn't really make sense to ask the node since you already asked the node
++	//! when getting the sheaf? maybe locking racy stuff?
+ 	if (!object)
+ 		object = __slab_alloc_node(s, gfpflags, node, addr, orig_size);
+ 
+@@ -5481,11 +5503,14 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
+ 	unsigned long flags;
+ 	bool on_node_partial;
+ 
++	//! never entered
+ 	if (IS_ENABLED(CONFIG_SLUB_TINY) || kmem_cache_debug(s)) {
+ 		free_to_partial_list(s, slab, head, tail, cnt, addr);
+ 		return;
+ 	}
+ 
++	//! no check on whether we are on the active slub of the current cpu?
++
+ 	do {
+ 		if (unlikely(n)) {
+ 			spin_unlock_irqrestore(&n->list_lock, flags);
+@@ -5497,6 +5522,7 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
+ 
+ 		was_full = (old.freelist == NULL);
+ 
++		//! set ptr in obj
+ 		set_freepointer(s, tail, old.freelist);
+ 
+ 		new.freelist = head;
+@@ -5524,9 +5550,11 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
+ 			on_node_partial = slab_test_node_partial(slab);
+ 		}
+ 
++	//! update freelist head
+ 	} while (!slab_update_freelist(s, slab, &old, &new, "__slab_free"));
+ 
+ 	if (likely(!n)) {
++		//! partially full slab (active, node partial)
+ 		/*
+ 		 * We didn't take the list_lock because the slab was already on
+ 		 * the partial list and will remain there.
+@@ -7027,18 +7055,25 @@ __refill_objects_node(struct kmem_cache *s, void **p, gfp_t gfp, unsigned int mi
+ 	pc.min_objects = min;
+ 	pc.max_objects = max;
+ 
++	//! take slabs from node partial list and put into `pc` list
++	//! take as many as needed to have >min empty slots in those slabs.
+ 	if (!get_partial_node_bulk(s, n, &pc, allow_spin))
++		//! the node partial list has length 0
+ 		return 0;
+ 
+ 	list_for_each_entry_safe(slab, slab2, &pc.slabs, slab_list) {
+ 
+ 		list_del(&slab->slab_list);
+ 
++		//! fuck the slab freelist
+ 		object = get_freelist_nofreeze(s, slab);
+ 
+ 		while (object && refilled < max) {
++			//! fill up the `objects` array of the sheaf to point to
++			//! free object slots.
+ 			p[refilled] = object;
+ 			object = get_freepointer(s, object);
++
+ 			maybe_wipe_obj_freeptr(s, p[refilled]);
+ 
+ 			refilled++;
+@@ -7050,15 +7085,20 @@ __refill_objects_node(struct kmem_cache *s, void **p, gfp_t gfp, unsigned int mi
+ 		 * need to find the tail object.
+ 		 */
+ 		if (unlikely(object)) {
++			//! if we have spares: unfuck the slab freelist
+ 			void *head = object;
+ 			void *tail;
+ 			int cnt = 0;
+-
++			//! why not:
++			//! slab->freelist = object;
++			//! what the fuck is going on
++			//! the freelist already exists, why are we freeing again
+ 			do {
+ 				tail = object;
+ 				cnt++;
+ 				object = get_freepointer(s, object);
+ 			} while (object);
++			//! insane.
+ 			__slab_free(s, slab, head, tail, cnt, _RET_IP_);
+ 		}
+ 
+@@ -7084,6 +7124,7 @@ __refill_objects_node(struct kmem_cache *s, void **p, gfp_t gfp, unsigned int mi
+ 		list_for_each_entry_safe(slab, slab2, &pc.slabs, slab_list) {
+ 
+ 			list_del(&slab->slab_list);
++			//! return to buddy!
+ 			discard_slab(s, slab);
+ 		}
+ 	}
+@@ -7162,12 +7203,14 @@ refill_objects(struct kmem_cache *s, void **p, gfp_t gfp, unsigned int min,
+ 	if (WARN_ON_ONCE(!gfpflags_allow_spinning(gfp)))
+ 		return 0;
+ 
++	//! fill a shief by using node partial slabs
+ 	refilled = __refill_objects_node(s, p, gfp, min, max,
+ 					 get_node(s, local_node),
+ 					 /* allow_spin = */ true);
+ 	if (refilled >= min)
+ 		return refilled;
+ 
++	//! refill objects using node partial lists by cpu closeness to NUMA node
+ 	refilled += __refill_objects_any(s, p + refilled, gfp, min - refilled,
+ 					 max - refilled);
+ 	if (refilled >= min)
+@@ -7175,6 +7218,7 @@ refill_objects(struct kmem_cache *s, void **p, gfp_t gfp, unsigned int min,
+ 
+ new_slab:
+ 
++	//! give from buddy
+ 	slab = new_slab(s, gfp, local_node);
+ 	if (!slab)
+ 		goto out;
+@@ -7185,6 +7229,7 @@ refill_objects(struct kmem_cache *s, void **p, gfp_t gfp, unsigned int min,
+ 	 * TODO: possible optimization - if we know we will consume the whole
+ 	 * slab we might skip creating the freelist?
+ 	 */
++	//! fill shief using slots from new slab
+ 	refilled += alloc_from_new_slab(s, slab, p + refilled, max - refilled,
+ 					/* allow_spin = */ true);
+ 
+-- 
+2.53.0
+
