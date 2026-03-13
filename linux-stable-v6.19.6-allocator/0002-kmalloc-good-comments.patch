@@ -1,12 +1,13 @@
-From 7bcbb90044788f96e5b22e7f57049ad5d47bca6b Mon Sep 17 00:00:00 2001
+From 3de090e56922badea3256f5611c5030acb15f18d Mon Sep 17 00:00:00 2001
 From: k4lizen <124312252+k4lizen@users.noreply.github.com>
 Date: Thu, 12 Mar 2026 16:40:28 +0100
 Subject: [PATCH 2/2] kmalloc good comments
 
 ---
  include/linux/slab.h |  9 +++++
+ mm/slab.h            |  4 +--
  mm/slub.c            | 83 ++++++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 92 insertions(+)
+ 3 files changed, 94 insertions(+), 2 deletions(-)
 
 diff --git a/include/linux/slab.h b/include/linux/slab.h
 index 2482992248dc..40b3611ee628 100644
@@ -43,8 +44,29 @@ index 2482992248dc..40b3611ee628 100644
  #define kmalloc(...)				alloc_hooks(kmalloc_noprof(__VA_ARGS__))
  
  void *kmalloc_nolock_noprof(size_t size, gfp_t gfp_flags, int node);
+diff --git a/mm/slab.h b/mm/slab.h
+index e767aa7e91b0..95e2741a9ba4 100644
+--- a/mm/slab.h
++++ b/mm/slab.h
+@@ -72,14 +72,14 @@ struct slab {
+ 	union {
+ 		struct {
+ 			union {
+-				struct list_head slab_list;
++				struct list_head slab_list; //! this is if you're a node partial slab
+ 				struct { /* For deferred deactivate_slab() */
+ 					struct llist_node llnode;
+ 					void *flush_freelist;
+ 				};
+ #ifdef CONFIG_SLUB_CPU_PARTIAL
+ 				struct {
+-					struct slab *next;
++					struct slab *next; //! this is if you're a cpu partial slab
+ 					int slabs;	/* Nr of slabs left */
+ 				};
+ #endif
 diff --git a/mm/slub.c b/mm/slub.c
-index 448f8cceed45..2ba6fc1b63fb 100644
+index 448f8cceed45..0d08d7f0088f 100644
 --- a/mm/slub.c
 +++ b/mm/slub.c
 @@ -426,6 +426,7 @@ struct freelist_tid {
@@ -187,7 +209,7 @@ index 448f8cceed45..2ba6fc1b63fb 100644
  		slub_set_percpu_partial(c, slab);
  
 +		//! `node_match(slab, node)` always true on UMA (most) systems
-+		//! `!allow_spin` usually true
++		//! `!allow_spin` usually false (i think)
 +		//!  => we always enter this branch 
  		if (likely(node_match(slab, node) &&
  			   pfmemalloc_match(slab, gfpflags)) ||

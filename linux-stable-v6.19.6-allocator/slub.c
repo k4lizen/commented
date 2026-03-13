@@ -4708,7 +4708,7 @@ new_slab:
 		slub_set_percpu_partial(c, slab);
 
 		//! `node_match(slab, node)` always true on UMA (most) systems
-		//! `!allow_spin` usually true
+		//! `!allow_spin` usually false (i think)
 		//!  => we always enter this branch 
 		if (likely(node_match(slab, node) &&
 			   pfmemalloc_match(slab, gfpflags)) ||
